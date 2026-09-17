@@ -1,26 +1,28 @@
 import { Router } from "express";
+import multer from "multer";
+import path from "path";
+import fs from "fs";
 import {
   startInterviewSession,
   processCandidateResponse,
   completeAndEvaluateInterview,
 } from "../controllers/interviewController";
-import { authenticate } from "../middleware/auth";
-import { uploadAudio } from "../middleware/audioUpload";
+
+const uploadDir = path.join(process.cwd(), "uploads");
+if (!fs.existsSync(uploadDir)) {
+  fs.mkdirSync(uploadDir, { recursive: true });
+}
+
+const upload = multer({
+  dest: uploadDir,
+  limits: { fileSize: 25 * 1024 * 1024 }, // 25 MB max
+});
 
 const router = Router();
 
-// POST /api/interview/start - Starts interview
-router.post("/start", authenticate, startInterviewSession);
-
-// POST /api/interview/respond - Accepts spoken audio or text answer
-router.post(
-  "/respond",
-  authenticate,
-  uploadAudio.single("audio"),
-  processCandidateResponse
-);
-
-// POST /api/interview/evaluate - Finalizes interview and generates scorecard
-router.post("/evaluate", authenticate, completeAndEvaluateInterview);
+// Route definitions
+router.post("/start", startInterviewSession);
+router.post("/respond", upload.single("audio"), processCandidateResponse);
+router.post("/evaluate", completeAndEvaluateInterview);
 
 export default router;

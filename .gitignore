@@ -1,0 +1,12 @@
+
+# Uploads & Debug Files
+server/uploads/*
+!server/uploads/.gitkeep
+server/debug_dumps/
+uploads/
+debug_dumps/
+*.webm
+*.pdf
+*.bin
+.env
+.env*.local

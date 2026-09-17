@@ -26,7 +26,7 @@ export const generateInitialQuestions = async (
     if (!ENV.GEMINI_API_KEY) return getFallbackQuestions();
 
     const model = aiClient.getGenerativeModel({
-      model: "gemini-1.5-flash",
+      model: "gemini-2.0-flash",
       generationConfig: {
         responseMimeType: "application/json",
         temperature: 0.7,
@@ -67,7 +67,7 @@ export const generateFollowUpQuestion = async (
     }
 
     const model = aiClient.getGenerativeModel({
-      model: "gemini-1.5-flash",
+      model: "gemini-2.0-flash",
       generationConfig: {
         temperature: 0.7,
       },

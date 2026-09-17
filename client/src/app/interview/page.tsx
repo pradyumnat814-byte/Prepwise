@@ -1,199 +1,601 @@
 "use client";
 
-import { useState, useEffect } from "react";
+import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
 import { api } from "@/lib/api";
-import { useAudioRecorder } from "@/hooks/useAudioRecorder";
+import {
+  useAudioRecorder,
+  speakText,
+} from "@/hooks/useAudioRecorder";
 
-interface IMessage {
+interface Message {
   speaker: "ai" | "candidate";
   text: string;
 }
 
-export default function InterviewRoomPage() {
+interface InterviewResponse {
+  candidateSpokenText?: string;
+  aiResponseText?: string;
+  currentQuestionIndex?: number;
+  totalQuestions?: number;
+  isCompleted?: boolean;
+}
+
+export default function Page() {
   const router = useRouter();
-  const { isRecording, startRecording, stopRecording, speakText } = useAudioRecorder();
+
+  const {
+    isRecording,
+    startRecording,
+    stopRecording,
+  } = useAudioRecorder();
 
   const [interviewId, setInterviewId] = useState<string>("");
-  const [messages, setMessages] = useState<IMessage[]>([]);
-  const [inputText, setInputText] = useState("");
-  const [loading, setLoading] = useState(false);
-  const [progress, setProgress] = useState({ current: 1, total: 5 });
-  const [isFinished, setIsFinished] = useState(false);
+  const [messages, setMessages] = useState<Message[]>([]);
+  const [inputText, setInputText] = useState<string>("");
+  const [loading, setLoading] = useState<boolean>(false);
+  const [statusNote, setStatusNote] = useState<string>("");
+  const [progress, setProgress] = useState<{
+    current: number;
+    total: number;
+  }>({
+    current: 1,
+    total: 5,
+  });
+  const [isFinished, setIsFinished] = useState<boolean>(false);
+  const [hasStartedAudio, setHasStartedAudio] =
+    useState<boolean>(false);
+
+  const initialGreeting =
+    "Welcome! I am your AI Technical Interviewer. Whenever you are ready, speak your answer or type it below to begin.";
 
   useEffect(() => {
-    const id = localStorage.getItem("interviewId");
-    if (!id) {
-      router.push("/upload");
-      return;
-    }
-    setInterviewId(id);
+    const initInterview = async () => {
+      // If an interview is already running, avoid restarting
+      const existingId = localStorage.getItem("interviewId");
+      if (existingId) {
+        setInterviewId(existingId);
+        return;
+      }
 
-    const greeting = "Welcome! I am your AI Technical Interviewer. Whenever you are ready, speak your answer or type it below to begin.";
-    setMessages([{ speaker: "ai", text: greeting }]);
-    speakText(greeting);
+      // Load the analyzed profile from the upload step
+      const storedProfile = localStorage.getItem("candidateProfile");
+      const candidateProfile = storedProfile
+        ? JSON.parse(storedProfile)
+        : null;
+
+      try {
+        setStatusNote("Starting interview session...");
+
+        const res = await api.post("/interview/start", {
+          candidateProfile,
+        });
+
+        if (res.data?.interviewId) {
+          localStorage.setItem("interviewId", res.data.interviewId);
+          setInterviewId(res.data.interviewId);
+          setStatusNote("");
+          setMessages([
+            {
+              speaker: "ai",
+              text: res.data.firstQuestion,
+            },
+          ]);
+        }
+      } catch (err) {
+        console.error("Failed to start interview session:", err);
+        setStatusNote(
+          "Could not start interview session. Please check your server."
+        );
+      }
+    };
+
+    initInterview();
   }, []);
 
-  const handleSendResponse = async (textToSend?: string, audioFile?: Blob) => {
-    if (isFinished) return; // Prevent sending if interview completed
+  const handleStartAudio = () => {
+    setHasStartedAudio(true);
+    speakText(initialGreeting);
+  };
 
-    const text = textToSend || inputText;
-    if (!text && !audioFile) return;
+  const handleSendResponse = async (
+    textToSend?: string,
+    audioFile?: Blob
+  ) => {
+    if (loading || isFinished) {
+      return;
+    }
+
+    const text =
+      textToSend !== undefined
+        ? textToSend.trim()
+        : inputText.trim();
+
+    if (!text && !audioFile) {
+      return;
+    }
+
+    if (!interviewId) {
+      setStatusNote(
+        "Interview session is not ready yet."
+      );
+      return;
+    }
 
     setLoading(true);
     setInputText("");
 
     if (text) {
-      setMessages((prev) => [...prev, { speaker: "candidate", text }]);
+      setMessages((previousMessages) => [
+        ...previousMessages,
+        {
+          speaker: "candidate",
+          text: text,
+        },
+      ]);
+    } else {
+      setStatusNote(
+        "Transcribing audio with Whisper.cpp..."
+      );
     }
 
     try {
       let response;
+
       if (audioFile) {
         const formData = new FormData();
-        formData.append("interviewId", interviewId);
-        formData.append("audio", audioFile, "recording.webm");
 
-        response = await api.post("/interview/respond", formData, {
-          headers: { "Content-Type": "multipart/form-data" },
-        });
+        formData.append(
+          "interviewId",
+          interviewId
+        );
+
+        formData.append(
+          "audio",
+          audioFile,
+          "recording.webm"
+        );
+
+        response = await api.post<InterviewResponse>(
+          "/interview/respond",
+          formData,
+          {
+            headers: {
+              "Content-Type":
+                "multipart/form-data",
+            },
+          }
+        );
+
+        const spokenText =
+          response.data.candidateSpokenText;
+
+        if (spokenText) {
+          setMessages((previousMessages) => [
+            ...previousMessages,
+            {
+              speaker: "candidate",
+              text: spokenText,
+            },
+          ]);
+        }
       } else {
-        response = await api.post("/interview/respond", {
-          interviewId,
-          candidateText: text,
-        });
+        response = await api.post<InterviewResponse>(
+          "/interview/respond",
+          {
+            interviewId: interviewId,
+            candidateText: text,
+          }
+        );
       }
 
-      const aiText = response.data.aiResponseText;
-      if (response.data.currentQuestionIndex) {
+      const data = response.data;
+
+      setStatusNote("");
+
+      if (data.currentQuestionIndex !== undefined) {
         setProgress({
-          current: Math.min(response.data.currentQuestionIndex, response.data.totalQuestions),
-          total: response.data.totalQuestions,
+          current: Math.min(
+            data.currentQuestionIndex,
+            data.totalQuestions ?? progress.total
+          ),
+          total:
+            data.totalQuestions ?? progress.total,
         });
       }
 
-      if (response.data.isCompleted) {
+      if (data.isCompleted) {
         setIsFinished(true);
       }
 
-      setMessages((prev) => [...prev, { speaker: "ai", text: aiText }]);
-      speakText(aiText);
-    } catch (error) {
-      console.error("Failed to send response:", error);
+      if (data.aiResponseText) {
+        setMessages((previousMessages) => [
+          ...previousMessages,
+          {
+            speaker: "ai",
+            text: data.aiResponseText as string,
+          },
+        ]);
+
+        if (hasStartedAudio) {
+          speakText(data.aiResponseText);
+        }
+      }
+    } catch (error: unknown) {
+      const errorMessage =
+        error instanceof Error
+          ? error.message
+          : "Unknown interview response error";
+      const axiosError = error as {
+        response?: {
+          data?: unknown;
+          status?: number;
+        };
+      };
+
+      console.warn(
+        "[Interview Response Error]:",
+        axiosError.response?.data || errorMessage
+      );
+
+      if (axiosError.response?.status === 404) {
+        localStorage.removeItem("interviewId");
+        setInterviewId("");
+        setStatusNote(
+          "Session expired. Please refresh the page to start a new session."
+        );
+      } else {
+        setStatusNote("Unable to process response.");
+      }
+
+      setMessages((previousMessages) => [
+        ...previousMessages,
+        {
+          speaker: "ai",
+          text: "I had trouble processing the audio. Could you please try repeating your response or typing it below?",
+        },
+      ]);
     } finally {
       setLoading(false);
     }
   };
 
   const toggleMic = async () => {
-    if (isFinished) return;
+    if (loading || isFinished) {
+      return;
+    }
+
+    if (!interviewId) {
+      setStatusNote(
+        "Interview session is not ready yet."
+      );
+      return;
+    }
+
+    setHasStartedAudio(true);
+
     if (isRecording) {
-      const blob = await stopRecording();
-      if (blob) handleSendResponse(undefined, blob);
+      try {
+        const audioBlob = await stopRecording();
+
+        if (audioBlob) {
+          await handleSendResponse(
+            undefined,
+            audioBlob
+          );
+        }
+      } catch (error) {
+        console.error(
+          "Error stopping recording:",
+          error
+        );
+
+        setStatusNote(
+          "Could not process the recording."
+        );
+      }
     } else {
-      startRecording();
+      try {
+        setStatusNote(
+          "Recording... Speak your answer."
+        );
+
+        startRecording();
+      } catch (error) {
+        console.error(
+          "Error starting recording:",
+          error
+        );
+
+        setStatusNote(
+          "Could not access your microphone."
+        );
+      }
     }
   };
 
   const handleFinishInterview = async () => {
+    if (loading || !interviewId) {
+      return;
+    }
+
     setLoading(true);
+    setStatusNote(
+      "Calculating scorecard evaluation..."
+    );
+
     try {
-      await api.post("/interview/evaluate", { interviewId });
+      const response = await api.post(
+        "/interview/evaluate",
+        {
+          interviewId: interviewId,
+        }
+      );
+
+      if (response.data) {
+        localStorage.setItem(
+          "interviewScorecard",
+          JSON.stringify(response.data)
+        );
+      }
+
       router.push("/scoreboard");
     } catch (error) {
-      console.error("Failed to complete interview:", error);
+      console.error(
+        "Failed to complete interview:",
+        error
+      );
+
+      setStatusNote(
+        "Evaluation failed. Please try again."
+      );
     } finally {
       setLoading(false);
     }
   };
 
+  const handleKeyDown = (
+    event: React.KeyboardEvent<HTMLInputElement>
+  ) => {
+    if (event.key === "Enter") {
+      event.preventDefault();
+
+      if (
+        !loading &&
+        !isFinished &&
+        inputText.trim()
+      ) {
+        handleSendResponse();
+      }
+    }
+  };
+
   return (
-    <div className="min-h-screen bg-[#FAFAFA] text-[#09090B] flex flex-col justify-between p-6 font-sans">
-      {/* Header */}
-      <header className="flex justify-between items-center border border-neutral-200 bg-white p-4 rounded max-w-4xl mx-auto w-full">
-        <div className="space-y-0.5">
-          <span className="font-mono text-[10px] text-neutral-400 uppercase tracking-wider">LIVE INTERVIEW SESSION</span>
-          <div className="text-xs font-mono font-bold text-[#09090B]">
-            TOPIC QUEUE: {progress.current} / {progress.total}
+    <main className="min-h-screen bg-[#F7F7F5] text-[#09090B]">
+      <div className="mx-auto flex min-h-screen w-full max-w-5xl flex-col px-4 py-6 sm:px-6 lg:px-8">
+
+        <header className="mb-6 flex items-center justify-between border-b border-neutral-200 pb-4">
+          <div>
+            <p className="font-mono text-[10px] uppercase tracking-[0.2em] text-neutral-500">
+              Live Interview Session
+            </p>
+
+            <h1 className="mt-1 text-xl font-semibold">
+              AI Technical Interviewer
+            </h1>
           </div>
+
+          <div className="text-right">
+            <p className="font-mono text-[10px] uppercase tracking-wider text-neutral-500">
+              Topic Queue
+            </p>
+
+            <p className="font-mono text-sm font-semibold">
+              {progress.current} / {progress.total}
+            </p>
+          </div>
+        </header>
+
+        <div className="mb-6 h-1 w-full overflow-hidden rounded-full bg-neutral-200">
+          <div
+            className="h-full bg-[#09090B] transition-all duration-500"
+            style={{
+              width: `${
+                progress.total > 0
+                  ? Math.min(
+                      (progress.current /
+                        progress.total) *
+                        100,
+                      100
+                    )
+                  : 0
+              }%`,
+            }}
+          />
         </div>
 
-        <button
-          onClick={handleFinishInterview}
-          disabled={loading}
-          className={`px-4 py-2 rounded text-xs font-mono font-bold transition border ${
-            isFinished
-              ? "bg-emerald-600 text-white border-emerald-600 animate-pulse shadow-md"
-              : "bg-white text-red-600 border-red-200 hover:border-red-400"
-          }`}
-        >
-          {loading ? "Evaluating..." : isFinished ? "View Scorecard 🎉" : "Finish & Score"}
-        </button>
-      </header>
+        {!hasStartedAudio && (
+          <div className="mb-5 flex items-center justify-between rounded-lg border border-neutral-200 bg-white px-4 py-3">
+            <div>
+              <p className="text-sm font-medium">
+                Enable AI Voice
+              </p>
 
-      {/* Transcript Log */}
-      <main className="flex-1 my-6 overflow-y-auto space-y-4 max-w-4xl mx-auto w-full pr-2">
-        {messages.map((msg, index) => (
-          <div
-            key={index}
-            className={`flex ${msg.speaker === "candidate" ? "justify-end" : "justify-start"}`}
-          >
-            <div
-              className={`max-w-xl p-5 border rounded text-xs leading-relaxed ${
-                msg.speaker === "candidate"
-                  ? "bg-[#09090B] text-white border-[#09090B]"
-                  : "bg-white text-[#09090B] border-neutral-200"
-              }`}
+              <p className="mt-1 text-xs text-neutral-500">
+                Allow the AI interviewer to speak
+                questions and responses.
+              </p>
+            </div>
+
+            <button
+              type="button"
+              onClick={handleStartAudio}
+              disabled={loading}
+              className="rounded bg-[#09090B] px-4 py-2 font-mono text-xs text-white hover:bg-neutral-800 disabled:cursor-not-allowed disabled:opacity-40"
             >
-              <div className="font-mono text-[10px] uppercase mb-1 opacity-60">
-                {msg.speaker === "candidate" ? "Candidate" : "AI Interviewer"}
+              Enable Voice
+            </button>
+          </div>
+        )}
+
+        <section className="flex-1 overflow-hidden rounded-xl border border-neutral-200 bg-white shadow-sm">
+
+          <div className="max-h-[60vh] min-h-[400px] space-y-5 overflow-y-auto p-5 sm:p-6">
+            {messages.length === 0 ? (
+              <div className="flex min-h-[350px] items-center justify-center">
+                <p className="font-mono text-xs text-neutral-400">
+                  Initializing interview...
+                </p>
               </div>
-              {msg.text}
+            ) : (
+              messages.map((message, index) => {
+                const isCandidate =
+                  message.speaker === "candidate";
+
+                return (
+                  <div
+                    key={`${message.speaker}-${index}`}
+                    className={`flex ${
+                      isCandidate
+                        ? "justify-end"
+                        : "justify-start"
+                    }`}
+                  >
+                    <div className="max-w-[85%] sm:max-w-[75%]">
+
+                      <div
+                        className={`mb-1.5 flex items-center gap-2 ${
+                          isCandidate
+                            ? "justify-end"
+                            : "justify-start"
+                        }`}
+                      >
+                        <span className="font-mono text-[10px] uppercase tracking-wider text-neutral-500">
+                          {isCandidate
+                            ? "Candidate"
+                            : "AI Interviewer"}
+                        </span>
+
+                        {!isCandidate && (
+                          <button
+                            type="button"
+                            onClick={() =>
+                              speakText(
+                                message.text
+                              )
+                            }
+                            className="font-mono text-[10px] text-neutral-500 hover:text-black"
+                          >
+                            🔊 Replay
+                          </button>
+                        )}
+                      </div>
+
+                      <div
+                        className={`rounded-lg px-4 py-3 text-sm leading-6 ${
+                          isCandidate
+                            ? "bg-[#09090B] text-white"
+                            : "bg-neutral-100 text-[#09090B]"
+                        }`}
+                      >
+                        {message.text}
+                      </div>
+                    </div>
+                  </div>
+                );
+              })
+            )}
+          </div>
+
+          {statusNote && (
+            <div className="border-t border-neutral-200 bg-neutral-50 px-5 py-2.5">
+              <p className="font-mono text-[10px] text-neutral-500">
+                {statusNote}
+              </p>
+            </div>
+          )}
+
+          <div className="border-t border-neutral-200 p-4">
+
+            <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
+
+              <button
+                type="button"
+                onClick={toggleMic}
+                disabled={
+                  loading || isFinished
+                }
+                className={`rounded border px-4 py-2 font-mono text-xs ${
+                  isRecording
+                    ? "border-red-500 bg-red-50 text-red-600 hover:bg-red-100"
+                    : "border-neutral-300 bg-white text-[#09090B] hover:bg-neutral-100"
+                } disabled:cursor-not-allowed disabled:opacity-40`}
+              >
+                {isRecording
+                  ? "⏹ Stop Recording"
+                  : "🎙 Mic Input"}
+              </button>
+
+              <button
+                type="button"
+                onClick={handleFinishInterview}
+                disabled={
+                  loading || !interviewId
+                }
+                className="rounded bg-[#09090B] px-4 py-2 font-mono text-xs text-white hover:bg-neutral-800 disabled:cursor-not-allowed disabled:opacity-40"
+              >
+                {loading
+                  ? "Evaluating..."
+                  : isFinished
+                  ? "View Scorecard 🎉"
+                  : "Finish & Score"}
+              </button>
+            </div>
+
+            <div className="flex items-center rounded-lg border border-neutral-300 bg-white focus-within:border-neutral-500">
+
+              <input
+                type="text"
+                value={inputText}
+                onChange={(event) =>
+                  setInputText(event.target.value)
+                }
+                onKeyDown={handleKeyDown}
+                disabled={
+                  loading || isFinished
+                }
+                placeholder={
+                  isFinished
+                    ? "Interview completed! Click 'View Scorecard 🎉' above."
+                    : "Type your response here or click 'Mic Input'..."
+                }
+                className="flex-1 bg-transparent px-3 py-2.5 text-xs font-medium text-[#09090B] outline-none disabled:cursor-not-allowed disabled:text-neutral-400"
+              />
+
+              <button
+                type="button"
+                onClick={() =>
+                  handleSendResponse()
+                }
+                disabled={
+                  loading ||
+                  isFinished ||
+                  !inputText.trim()
+                }
+                className="mr-1.5 rounded bg-[#09090B] px-5 py-2.5 font-mono text-xs text-white hover:bg-neutral-800 disabled:cursor-not-allowed disabled:opacity-40"
+              >
+                Send
+              </button>
             </div>
           </div>
-        ))}
-      </main>
+        </section>
 
-      {/* Input Controls */}
-      <footer className="max-w-4xl mx-auto w-full space-y-3">
-        <div className="flex items-center space-x-3 bg-white border border-neutral-200 p-2 rounded">
-          <button
-            onClick={toggleMic}
-            disabled={isFinished || loading}
-            className={`px-4 py-2.5 rounded font-mono text-xs font-bold transition flex items-center justify-center ${
-              isFinished
-                ? "bg-neutral-100 text-neutral-400 border border-neutral-200 cursor-not-allowed"
-                : isRecording
-                ? "bg-red-600 text-white animate-pulse"
-                : "bg-neutral-100 hover:bg-neutral-200 text-black border border-neutral-300"
-            }`}
-          >
-            {isRecording ? "Stop Speech" : "Mic Input"}
-          </button>
-
-          <input
-            type="text"
-            disabled={isFinished || loading}
-            value={inputText}
-            onChange={(e) => setInputText(e.target.value)}
-            onKeyDown={(e) => e.key === "Enter" && handleSendResponse()}
-            placeholder={
-              isFinished
-                ? "Interview completed! Click 'View Scorecard 🎉' above."
-                : "Type your response here or click 'Mic Input'..."
-            }
-            className="flex-1 bg-transparent px-3 text-xs font-medium text-[#09090B] focus:outline-none disabled:cursor-not-allowed disabled:text-neutral-400"
-          />
-
-          <button
-            onClick={() => handleSendResponse()}
-            disabled={loading || isFinished || !inputText.trim()}
-            className="px-5 py-2.5 bg-[#09090B] hover:bg-neutral-800 text-white font-mono text-xs rounded transition disabled:opacity-40 disabled:cursor-not-allowed"
-          >
-            Send
-          </button>
-        </div>
-      </footer>
-    </div>
+        <footer className="pt-4 text-center">
+          <p className="font-mono text-[9px] uppercase tracking-widest text-neutral-400">
+            AI Interview System
+          </p>
+        </footer>
+      </div>
+    </main>
   );
 }

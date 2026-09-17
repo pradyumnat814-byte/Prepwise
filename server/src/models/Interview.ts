@@ -1,90 +1,67 @@
-import { Schema, model, Document, Types } from "mongoose";
+import mongoose, { Schema, Document } from "mongoose";
+import { ICandidateProfile, IInterviewState, InterviewStage } from "../types/candidateProfile.types";
+import { IAnswerEvaluation } from "../services/interview/interviewSchemas";
 
-export interface ITranscriptEntry {
-  speaker: "ai" | "candidate";
-  text: string;
+export interface IInterviewTurn {
+  stage: InterviewStage;
+  topic: string;
+  difficulty: number;
+  question: string;
+  candidateAnswer: string;
+  evaluation?: IAnswerEvaluation;
+  weightedScore?: number;
   timestamp: Date;
 }
 
-export interface IInterview extends Document {
-  userId: Types.ObjectId;
-  resumeId?: Types.ObjectId;
-  githubProfileId?: Types.ObjectId;
-  status: "pending" | "in-progress" | "completed";
-  difficulty: "Beginner" | "Intermediate" | "Advanced" | "Expert";
-  currentQuestionIndex: number;
-  followUpCount: number;
-  questions: Array<{
-    id: number;
-    category: string;
-    question: string;
-    purpose: string;
-  }>;
-  transcript: ITranscriptEntry[];
-  scores?: {
+export interface IInterviewDocument extends Document {
+  userId: mongoose.Types.ObjectId;
+  candidateProfile: ICandidateProfile;
+  interviewState: IInterviewState;
+  previousQuestions: string[];
+  turns: IInterviewTurn[];
+  status: "in_progress" | "completed";
+  finalScore?: {
     technicalScore: number;
     communicationScore: number;
     confidenceScore: number;
     problemSolvingScore: number;
-    behaviorScore: number;
+    depthScore: number;
     overallScore: number;
   };
-  feedback?: {
+  finalFeedback?: {
     strengths: string[];
     weaknesses: string[];
     recommendations: string[];
     summary: string;
+    hiringRecommendation: string;
   };
+  createdAt: Date;
+  updatedAt: Date;
 }
 
-const InterviewSchema = new Schema<IInterview>(
+const InterviewSchema = new Schema(
   {
     userId: { type: Schema.Types.ObjectId, ref: "User", required: true },
-    resumeId: { type: Schema.Types.ObjectId, ref: "Resume" },
-    githubProfileId: { type: Schema.Types.ObjectId, ref: "GitHubProfile" },
-    status: {
-      type: String,
-      enum: ["pending", "in-progress", "completed"],
-      default: "pending",
-    },
-    difficulty: {
-      type: String,
-      enum: ["Beginner", "Intermediate", "Advanced", "Expert"],
-      default: "Intermediate",
-    },
-    currentQuestionIndex: { type: Number, default: 0 },
-    followUpCount: { type: Number, default: 0 },
-    questions: [
+    candidateProfile: { type: Object, required: true },
+    interviewState: { type: Object, required: true },
+    previousQuestions: { type: [String], default: [] },
+    turns: [
       {
-        id: Number,
-        category: String,
-        question: String,
-        purpose: String,
-      },
-    ],
-    transcript: [
-      {
-        speaker: { type: String, enum: ["ai", "candidate"], required: true },
-        text: { type: String, required: true },
+        stage: { type: String, required: true },
+        topic: { type: String, required: true },
+        difficulty: { type: Number, required: true },
+        question: { type: String, required: true },
+        candidateAnswer: { type: String, default: "" },
+        evaluation: { type: Object },
+        weightedScore: { type: Number },
         timestamp: { type: Date, default: Date.now },
       },
     ],
-    scores: {
-      technicalScore: Number,
-      communicationScore: Number,
-      confidenceScore: Number,
-      problemSolvingScore: Number,
-      behaviorScore: Number,
-      overallScore: Number,
-    },
-    feedback: {
-      strengths: [String],
-      weaknesses: [String],
-      recommendations: [String],
-      summary: String,
-    },
+    status: { type: String, enum: ["in_progress", "completed"], default: "in_progress" },
+    finalScore: { type: Object },
+    finalFeedback: { type: Object },
   },
   { timestamps: true }
 );
 
-export const Interview = model<IInterview>("Interview", InterviewSchema);
+export const Interview = mongoose.model("Interview", InterviewSchema);

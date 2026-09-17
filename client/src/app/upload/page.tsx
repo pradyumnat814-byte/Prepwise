@@ -25,15 +25,21 @@ export default function UploadPage() {
       const formData = new FormData();
       formData.append("resume", file);
 
-      await api.post("/candidate/analyze", formData, {
+      const res = await api.post("/candidate/analyze", formData, {
         headers: { "Content-Type": "multipart/form-data" },
       });
 
-      const startRes = await api.post("/interview/start");
-      localStorage.setItem("interviewId", startRes.data.interviewId);
-
-      router.push("/interview");
+      if (res.data?.profile) {
+        localStorage.removeItem("interviewId");
+        localStorage.removeItem("interviewScorecard");
+        localStorage.setItem(
+          "candidateProfile",
+          JSON.stringify(res.data.profile)
+        );
+        router.push("/interview");
+      }
     } catch (err: any) {
+      console.error("Upload failed:", err);
       setError(err.response?.data?.error || "Failed to analyze candidate profile.");
     } finally {
       setLoading(false);
